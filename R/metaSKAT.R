@@ -23,21 +23,6 @@ Get_Liu_PVal.MOD.Lambda <- function (Q.all, lambda, log.p = FALSE)
                     lower.tail = FALSE, log.p = log.p)
   return(p.value)
 }
-SKAT_davies <- function (q, lambda, h = rep(1, length(lambda)), delta = rep(0, length(lambda)), sigma = 0, lim = 10000, acc = 1e-04)
-{
-  r <- length(lambda)
-  if (length(h) != r)
-    stop("lambda and h should have the same length!")
-  if (length(delta) != r)
-    stop("lambda and delta should have the same length!")
-  out <- .C("qfc", lambdas = as.double(lambda), noncentral = as.double(delta),
-            df = as.integer(h), r = as.integer(r), sigma = as.double(sigma),
-            q = as.double(q), lim = as.integer(lim), acc = as.double(acc),
-            trace = as.double(rep(0, 7)), ifault = as.integer(0),
-            res = as.double(0), PACKAGE = "MTAR")
-  out$res <- 1 - out$res
-  return(list(trace = out$trace, ifault = out$ifault, Qq = out$res))
-}
 
 Get_Liu_Params_Mod_Lambda <- function (lambda)
 {
@@ -126,7 +111,7 @@ SKAT_Optimal_Integrate_Func_Davies <- function (x, pmin.q, param.m, r.all)
       min1.temp <- min1 - param.m$MuQ
       sd1 <- sqrt(param.m$VarQ - param.m$VarRemain)/sqrt(param.m$VarQ)
       min1.st <- min1.temp * sd1 + param.m$MuQ
-      dav.re <- SKAT_davies(min1.st, param.m$lambda, acc = 10^(-6))
+      dav.re <- CompQuadForm::davies(min1.st, param.m$lambda, acc = 10^(-6))
       temp <- dav.re$Qq
       if (dav.re$ifault != 0) {
         stop("dav.re$ifault is not 0")
@@ -223,7 +208,7 @@ Get_PValue.Lambda <- function (lambda, Q)
   is_converge <- rep(0, n1)
   p.val.liu <- Get_Liu_PVal.MOD.Lambda(Q, lambda)
   for (i in 1:n1) {
-    out <- SKAT_davies(Q[i], lambda, acc = 10^(-6))
+    out <- CompQuadForm::davies(Q[i], lambda, acc = 10^(-6))
     p.val[i] <- out$Qq
     is_converge[i] <- 1
     if (length(lambda) == 1) {
@@ -313,43 +298,6 @@ SKAT_Optimal_PValue_Davies <- function (pmin.q, param.m, r.all, pmin = NULL)
   }
   return(pvalue)
 }
-
-pchisqsum2 <- function (Q, lambda, delta = rep(0, length(lambda)), method = c("saddlepoint",
-                                                                              "integration", "liu"), acc = 1e-07)
-{
-  method <- match.arg(method)
-  delta <- delta[lambda > 0]
-  lambda <- lambda[lambda > 0]
-  if (method == "saddlepoint") {
-    p = saddle(Q, lambda, delta)
-    if (is.na(p)) {
-      method <- "integration"
-    }
-    else {
-      return(list(p = p, errflag = 0))
-    }
-  }
-  if (method == "integration") {
-    tmp <- CompQuadForm::davies(q = Q, lambda = lambda,
-                                delta = delta, acc = acc)
-    if (tmp$ifault > 0) {
-      lambda <- zapsmall(lambda, digits = 2)
-      delta <- delta[lambda > 0]
-      lambda <- lambda[lambda > 0]
-      tmp <- CompQuadForm::farebrother(q = Q, lambda = lambda,
-                                       delta = delta)
-    }
-    Qq <- if ("Qq" %in% names(tmp))
-      tmp$Qq
-    else tmp$res
-    return(list(p = Qq, errflag = 0))
-  }
-  if (method == "liu") {
-    tmp <- CompQuadForm::liu(Q, lambda = lambda, delta = delta)
-    return(list(p = tmp, errflag = 0))
-  }
-}
-
 
 SKAT_META_Optimal_Get_Q<-function(Score, r.all){
   # no change
@@ -556,28 +504,43 @@ Met_SKAT_Get_Pvalue<-function(Score, Phi, r.corr = 0){
   return(re)
 }
 
-RVAS <- function(U, V, MAF, weight.beta = NULL, type = "mean", grid = NULL){
-  if(is.null(weight.beta)) {
-    weight <- rep(1/length(MAF), length(MAF))
-  } else {
-    weight <- Beta.Weights(MAF, weights.beta = weight.beta)
-  }
-  Score <- U * weight
-  SMat.Summary <- t(t(V * weight) * weight)
-  if(type == "mean") {
-    # run Burden
-    ret <- Met_SKAT_Get_Pvalue(Score, SMat.Summary, r.corr = 1)$p.value
-  }else if(type == "variance") {
-    # run SKAT
-    ret <- Met_SKAT_Get_Pvalue(Score, SMat.Summary, r.corr = 0)$p.value
-  }else if(type == "optimal"){
-    if(is.null(grid)) {
-      grid <- seq(0, 1, by = 0.1)
+# non-exported functions from SeqMeta package
+# https://github.com/cran/seqMeta
+# date: 04/22/2020
+
+pchisqsum2 <- function (Q, lambda, delta = rep(0, length(lambda)), method = c("saddlepoint",
+                                                                              "integration", "liu"), acc = 1e-07)
+{
+  method <- match.arg(method)
+  delta <- delta[lambda > 0]
+  lambda <- lambda[lambda > 0]
+  if (method == "saddlepoint") {
+    p = saddle(Q, lambda, delta)
+    if (is.na(p)) {
+      method <- "integration"
     }
-    # run SKATO
-    ret <- Met_SKAT_Get_Pvalue(Score, SMat.Summary, r.corr = grid)$p.value
+    else {
+      return(list(p = p, errflag = 0))
+    }
   }
-  ret <- ifelse(ret == 1, 0.999, ret)
-  return(ret)
+  if (method == "integration") {
+    tmp <- CompQuadForm::davies(q = Q, lambda = lambda,
+                                delta = delta, acc = acc)
+    if (tmp$ifault > 0) {
+      lambda <- zapsmall(lambda, digits = 2)
+      delta <- delta[lambda > 0]
+      lambda <- lambda[lambda > 0]
+      tmp <- CompQuadForm::farebrother(q = Q, lambda = lambda,
+                                       delta = delta)
+    }
+    Qq <- if ("Qq" %in% names(tmp))
+      tmp$Qq
+    else tmp$res
+    return(list(p = Qq, errflag = 0))
+  }
+  if (method == "liu") {
+    tmp <- CompQuadForm::liu(Q, lambda = lambda, delta = delta)
+    return(list(p = tmp, errflag = 0))
+  }
 }
 

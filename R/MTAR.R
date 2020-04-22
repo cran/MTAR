@@ -333,3 +333,29 @@ nonpolymorphic.fn <- function(mat, obs.stat) {
   return(update.ret)
 }
 
+
+RVAS <- function(U, V, MAF, weight.beta = NULL, type = "mean", grid = NULL){
+  if(is.null(weight.beta)) {
+    weight <- rep(1/length(MAF), length(MAF))
+  } else {
+    weight <- Beta.Weights(MAF, weights.beta = weight.beta)
+  }
+  Score <- U * weight
+  SMat.Summary <- t(t(V * weight) * weight)
+  if(type == "mean") {
+    # run Burden
+    ret <- Met_SKAT_Get_Pvalue(Score, SMat.Summary, r.corr = 1)$p.value
+  }else if(type == "variance") {
+    # run SKAT
+    ret <- Met_SKAT_Get_Pvalue(Score, SMat.Summary, r.corr = 0)$p.value
+  }else if(type == "optimal"){
+    if(is.null(grid)) {
+      grid <- seq(0, 1, by = 0.1)
+    }
+    # run SKATO
+    ret <- Met_SKAT_Get_Pvalue(Score, SMat.Summary, r.corr = grid)$p.value
+  }
+  ret <- ifelse(ret == 1, 0.999, ret)
+  return(ret)
+}
+
